@@ -1,11 +1,13 @@
 import os
-import io
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageTk
 from datetime import datetime
+
+# --- Import our Custom Backend Engine ---
+from image_engine import process_image, SUPPORTED_FORMATS
 
 # --- Drag & Drop Setup ---
 try:
@@ -20,57 +22,8 @@ except ImportError:
     class CustomTkRoot(ctk.CTk):
         pass
 
-# --- Application Configuration ---
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
-
-SUPPORTED_FORMATS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff')
-
-# --- Image Processing Logic ---
-def process_image(input_path, output_path, max_size_kb, scale_percent, force_format="Auto"):
-    try:
-        img = Image.open(input_path)
-        img_format = img.format if img.format else "JPEG"
-        
-        if force_format != "Auto":
-            img_format = force_format
-            output_path = os.path.splitext(output_path)[0] + f".{force_format.lower()}"
-            if img_format in ["JPEG", "WEBP"]:
-                img = img.convert("RGB")
-
-        elif img_format == "PNG" and max_size_kb > 0:
-            img_format = "JPEG"
-            img = img.convert("RGB")
-            output_path = os.path.splitext(output_path)[0] + ".jpg"
-
-        if scale_percent < 100:
-            new_width = int(img.width * (scale_percent / 100))
-            new_height = int(img.height * (scale_percent / 100))
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-        if max_size_kb > 0:
-            quality = 95
-            while quality >= 10:
-                buffer = io.BytesIO()
-                img.save(buffer, format=img_format, quality=quality)
-                size_kb = len(buffer.getvalue()) / 1024
-
-                if size_kb <= max_size_kb:
-                    with open(output_path, "wb") as f:
-                        f.write(buffer.getvalue())
-                    return True, f"Optimized to {size_kb:.1f}KB", output_path
-                quality -= 5
-            return False, "Could not compress below target size", None
-            
-        else:
-            img.save(output_path, format=img_format, quality=95)
-            return True, "Dimensions resized successfully", output_path
-
-    except UnidentifiedImageError:
-        return False, "Invalid or corrupted image file", None
-    except Exception as e:
-        return False, str(e), None
-
 
 # --- UI Class ---
 class SmartSizerPro(CustomTkRoot):
@@ -81,12 +34,25 @@ class SmartSizerPro(CustomTkRoot):
         self.geometry("950x750")
         self.minsize(900, 700)
 
-        # --- 1. Fix: Load PNG Icon Safely ---
+        # --- Auto-Converting Icon Loader ---
         try:
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(current_dir, "icon.png")
-            icon_image = tk.PhotoImage(file=icon_path)
-            self.iconphoto(False, icon_image)
+            png_path = os.path.join(current_dir, "icon.png")
+            ico_path = os.path.join(current_dir, "icon.ico")
+            
+            # 1. Open the PNG
+            img = Image.open(png_path)
+            
+            # 2. Update the Windows Taskbar (Accepts PNG)
+            self.app_icon = ImageTk.PhotoImage(img)
+            self.iconphoto(True, self.app_icon)
+            
+            # 3. Update the Window Title Bar (Requires ICO)
+            if not os.path.exists(ico_path):
+                img.save(ico_path, format="ICO", sizes=[(32, 32)])
+                
+            self.iconbitmap(ico_path)
+            
         except Exception as e:
             print(f"⚠️ Could not load icon. Error: {e}")
 
@@ -98,7 +64,7 @@ class SmartSizerPro(CustomTkRoot):
         self.is_processing = False
         self.cancel_flag = False
 
-        self.setup_navbar() # Replaced setup_menu()
+        self.setup_navbar()
         self.setup_ui()
         
         if HAS_DND:
@@ -107,14 +73,12 @@ class SmartSizerPro(CustomTkRoot):
         else:
             self.log("⚠️ Drag-and-Drop disabled. Please 'pip install tkinterdnd2'", "error")
 
-    # --- 2. Fix: Custom Modern Navigation Bar ---
+    # --- Custom Modern Navigation Bar ---
     def setup_navbar(self):
-        # Frame that sits at the very top
         self.nav_frame = ctk.CTkFrame(self, height=35, corner_radius=0, fg_color=("gray85", "gray15"))
         self.nav_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self.nav_frame.grid_propagate(False) # Keep fixed height
+        self.nav_frame.grid_propagate(False)
 
-        # Navigation Buttons
         self.btn_file = ctk.CTkButton(self.nav_frame, text="File", width=60, fg_color="transparent", 
                                       text_color=("black", "white"), hover_color=("gray75", "gray25"),
                                       command=lambda: self.show_file_menu(self.btn_file))
@@ -145,7 +109,6 @@ class SmartSizerPro(CustomTkRoot):
         menu.add_command(label="Open Output Directory", command=self.open_output_dir_menu)
         menu.add_separator()
         menu.add_command(label="Exit", command=self.quit)
-        # Position dropdown right below the button
         menu.post(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
 
     def show_view_menu(self, btn):
@@ -162,11 +125,9 @@ class SmartSizerPro(CustomTkRoot):
         menu.add_command(label="About SmartSizer", command=lambda: messagebox.showinfo("About", "SmartSizer\n\nA professional batch image optimization utility.\n\n@2026 Parakrama Welipitiya"))
         menu.post(btn.winfo_rootx(), btn.winfo_rooty() + btn.winfo_height())
 
-
     def setup_ui(self):
-        # Adjusted rows to account for Navbar
-        self.grid_rowconfigure(0, weight=0) # Navbar row
-        self.grid_rowconfigure(1, weight=1) # Content row
+        self.grid_rowconfigure(0, weight=0) 
+        self.grid_rowconfigure(1, weight=1) 
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=2)
 
@@ -213,7 +174,6 @@ class SmartSizerPro(CustomTkRoot):
 
         self.btn_start = ctk.CTkButton(self.controls_frame, text="🚀 Start Optimization", height=40, font=ctk.CTkFont(weight="bold"), command=self.start_processing_thread)
         self.btn_start.pack(pady=20, padx=20, fill="x", side="bottom")
-
 
         # --- Right Panel ---
         self.log_frame = ctk.CTkFrame(self)
@@ -437,6 +397,7 @@ class SmartSizerPro(CustomTkRoot):
             try: orig_bytes += os.path.getsize(filepath)
             except: pass
 
+            # Calling the backend logic!
             success, msg, final_out_path = process_image(filepath, temp_out_path, target_kb, scale_pct, fmt)
             
             if success and final_out_path:
